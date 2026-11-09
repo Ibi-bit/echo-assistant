@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_label">Assistant now playing access</string>
+    <string name="accessibility_description">Lets the voice assistant read the track title and artist that Rusty already shows, and press Rusty\'s play, pause, next, and previous buttons. Nothing is recorded or sent anywhere except the compact status sent to your own relay.</string>
+</resources>

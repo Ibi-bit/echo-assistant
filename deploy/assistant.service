@@ -1,0 +1,13 @@
+[Unit]
+Description=Echo Show voice assistant relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/echo-assistant/server
+ExecStart=%h/echo-assistant/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

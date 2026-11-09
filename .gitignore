@@ -1,0 +1,14 @@
+.venv/
+.env
+models/
+__pycache__/
+*.pyc
+*.wav
+.DS_Store
+
+# Android build outputs and caches
+android/app/build/
+android/.gradle/
+android/.gradle-dist/
+android/.kotlin/
+*.apk
