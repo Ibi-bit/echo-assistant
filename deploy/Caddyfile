@@ -1,0 +1,11 @@
+{$ASSIST_DOMAIN} {
+	encode zstd gzip
+
+	# WebSocket relay, including the ?token=... query.
+	reverse_proxy assistant:8765
+
+	# Settings page. Add basic auth here if you do not use ASSIST_TOKEN.
+	# basicauth {
+	# 	you $2a$14$REPLACE_WITH_HTPASSWD_HASH
+	# }
+}

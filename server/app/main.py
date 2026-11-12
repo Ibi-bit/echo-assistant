@@ -5,12 +5,14 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import RedirectResponse
 
 from .audio import WakeWord
 from .config import SERVER_DIR, settings
 from .pipeline import AssistantSession
 from .stt import Transcriber
 from .tts import Speaker
+from .webconfig import router as web_config_router
 
 log = logging.getLogger("assistant")
 
@@ -46,6 +48,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Echo Show Assistant", lifespan=lifespan)
+app.include_router(web_config_router)
+
+
+@app.get("/")
+async def index() -> RedirectResponse:
+    return RedirectResponse("/config")
 
 
 @app.get("/health")
@@ -53,7 +61,7 @@ async def health() -> dict:
     return {
         "ok": True,
         "model": settings.model,
-        "fallback_model": settings.fallback_model,
+        "fallback_models": list(settings.fallback_models),
         "wake_words": list(settings.wake_words),
         "whisper": settings.whisper_model,
         "voice": settings.voice_path().name,

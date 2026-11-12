@@ -10,13 +10,39 @@ Rusty (`dev.rusty.app`, the Spotify Connect / Home Assistant appliance) keeps th
   ┌──────────────────┐   ws://LAN:8765    ┌──────────────────────────────┐
   │ Rusty (fullscreen)│                   │ openWakeWord  (hey_jarvis)   │
   │  └ overlay card   │                  │ faster-whisper (base.en)     │
-  │ mic → PCM 16 kHz │ ─────────────────► │ OpenRouter (Nemotron 3.5)    │
-  │ speaker ← PCM    │ ◄───────────────── │ Piper TTS                    │
+  │ mic → PCM 16 kHz │ ─────────────────► │ OpenRouter (DeepSeek V4 Flash,│
+  │ speaker ← PCM    │ ◄───────────────── │  Nemotron fallbacks)         │
   └──────────────────┘                    └──────────────────────────────┘
 ```
 
-The model is `nvidia/nemotron-3.5-lightning:free` — text only, 1M context,
-tool calling, free tier. Speech in and speech out are handled locally, so the free model only ever sees text.
+The primary model is `deepseek/deepseek-v4-flash` — a cheap paid model that is
+much better at tool calls than the free tier. If it fails before producing a
+token, the server retries `nvidia/nemotron-3-ultra-550b-a55b:free` and then
+`nvidia/nemotron-3.5-lightning:free`, so the assistant keeps answering even when
+one provider is down. Speech in and speech out are handled locally, so the model
+only ever sees text.
+
+## What it can do
+
+- **Alarms and timers** — sets them in the tablet's clock app, which rings and
+  shows the full-screen alarm even if the assistant is not running.
+- **Volume** — set/raise/lower/mute the tablet's media volume; replies stream on
+  the same stream, so the volume command affects the voice you hear.
+- **Media transport** — play, pause, toggle, next, previous, restart current
+  track. Rusty has no MediaSession, so this presses Rusty's own on-screen
+  buttons through an optional accessibility service.
+- **Device status** — battery, charging, screen, brightness, Wi-Fi/IP, volumes,
+  Rusty state, what Spotify is playing (title/artist/position), next alarm and
+  running timers. A compact snapshot is pushed every 5 s and injected into the
+  prompt, so "what's playing?" and "how much battery?" work without tools.
+- **Web search** — weather, news, sports and anything time-sensitive goes
+  through DuckDuckGo and is answered in plain speech.
+- **Keep listening** — "and keep listening" keeps the mic open for a follow-up
+  without another wake word.
+
+Short imperatives ("pause", "mute", "timer for 5 minutes") are routed by a
+deterministic regex before the model sees them, so they still work when a small
+model forgets to call its tool.
 
 ## Server
 
@@ -47,6 +73,14 @@ systemctl --user status assistant
 
 The desktop must stay awake. `loginctl enable-linger "$USER"` lets the user service run without an active login session.
 
+### Run it in the cloud
+
+`deploy/cloud.md` has the full walkthrough: Oracle Cloud Always Free Ampere A1
+(4 OCPU / 24 GB, $0), install, systemd or Docker, and free TLS with
+Caddy + DuckDNS or a Cloudflare Tunnel. The relay must stay awake; free PaaS
+tiers that sleep when idle will not work. A `Dockerfile` and
+`docker-compose.yml` are included.
+
 ### Rebuild models from scratch
 
 ```bash
@@ -55,11 +89,30 @@ server/scripts/download_models.sh
 
 ### Configuration
 
-Copy `server/.env.example` to `server/.env` and edit. The useful knobs:
+There is a settings page served by the assistant itself:
+
+- On the desktop: <http://127.0.0.1:8765/config>
+- From any device on the LAN: `http://<desktop-ip>:8765/config`
+
+It edits model and fallbacks, API key, wake word/threshold, Whisper model, Piper
+voice, turn-taking timings, home city, system prompt, history and reply limits,
+and the relay token. **Save & restart** writes `server/.env`, restarts the
+systemd unit, and the tablet reconnects on its own. Secrets are never echoed back
+to the browser; leaving a password field blank keeps the stored value.
+
+If `ASSIST_TOKEN` is set, the page asks for it once and stores a cookie. On a
+cloud host put the page behind TLS and the token (see `deploy/cloud.md`).
+
+You can still edit `server/.env` directly — copy `server/.env.example` and edit.
+The settings page preserves comments and keys it does not know about, so manual
+entries survive.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `OPENROUTER_MODEL` | `nvidia/nemotron-3.5-lightning:free` | Any OpenRouter model id |
+| `OPENROUTER_MODEL` | `deepseek/deepseek-v4-flash` | Any OpenRouter model id |
+| `OPENROUTER_FALLBACK_MODELS` | `nemotron-3-ultra:free,nemotron-3.5-lightning:free` | Comma-separated, tried in order |
+| `ASSIST_LOCATION` | empty | City used for weather questions |
+| `SYSTEM_PROMPT` | built-in | Empty means the spoken-style default |
 | `WAKE_WORDS` | `hey_jarvis` | Any bundled openWakeWord name: `hey_jarvis`, `alexa`, `hey_mycroft`, `hey_rhasspy`, `timer`, `weather` |
 | `WAKE_THRESHOLD` | `0.5` | Raise to 0.6–0.7 if it wakes on the TV or loud music |
 | `WHISPER_MODEL` | `base.en` | `small.en` is more accurate, ~2× slower |
@@ -67,7 +120,7 @@ Copy `server/.env.example` to `server/.env` and edit. The useful knobs:
 | `END_SILENCE_MS` | `900` | How long a pause ends the question |
 | `HISTORY_TURNS` | `8` | Conversation memory per tablet |
 | `DISABLE_REASONING` | `true` | Keep `true` for Nemotron; otherwise it writes a long reasoning preamble before answering |
-| `ASSIST_TOKEN` | empty | If set, clients must use `ws://host:8765/ws?token=...` |
+| `ASSIST_TOKEN` | empty | If set, clients must use `ws://host:8765/ws?token=...` and `/config` asks for it |
 
 ## Tablet
 
@@ -133,7 +186,9 @@ Before speaking, the service asks Android for transient audio focus. Apps that h
 4. Reply tokens stream to the overlay card and are cut into sentences; each sentence is synthesized by Piper and pushed as raw PCM 22.05 kHz. First audio usually arrives while the model is still writing the end of the reply.
 5. The tablet reports `playback_done` when its speaker queue drains, and only then does the server go back to `idle` — this stops the assistant from waking itself on its own voice.
 
-Reasoning is disabled in the request (`reasoning: {enabled: false}`). Without that, Nemotron spends the whole token budget on a visible reasoning preamble and never gets to the answer.
+Reasoning is disabled in the request (`reasoning: {enabled: false}`) unless you turn
+`DISABLE_REASONING` off in `/config`. Some endpoints reject that flag (GLM 5.3
+Flash, for example), which is why it is a setting.
 
 ## Known limits
 

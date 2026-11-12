@@ -71,11 +71,18 @@ class Settings:
     fallback_model: str = field(
         default_factory=lambda: _env("OPENROUTER_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning:free")
     )
+    fallback_models: tuple[str, ...] = field(
+        default_factory=lambda: _words(
+            "OPENROUTER_FALLBACK_MODELS",
+            _env("OPENROUTER_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning:free"),
+        )
+    )
     disable_reasoning: bool = field(
         default_factory=lambda: _env("DISABLE_REASONING", "true").lower()
         not in ("0", "false", "no", "off")
     )
     system_prompt: str = field(default_factory=lambda: _env("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT))
+    location: str = field(default_factory=lambda: _env("ASSIST_LOCATION", ""))
     history_turns: int = field(default_factory=lambda: _int("HISTORY_TURNS", 8))
     max_reply_tokens: int = field(default_factory=lambda: _int("MAX_REPLY_TOKENS", 350))
     playback_timeout_s: float = field(default_factory=lambda: _float("PLAYBACK_TIMEOUT_S", 12.0))

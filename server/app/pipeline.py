@@ -226,7 +226,7 @@ class AssistantSession:
             http,
             api_key=settings.api_key,
             model=settings.model,
-            fallback_model=settings.fallback_model,
+            fallback_models=list(settings.fallback_models),
             system_prompt=prompt,
             base_url=settings.api_base,
             max_tokens=settings.max_reply_tokens,
@@ -245,8 +245,10 @@ class AssistantSession:
     def _system_prompt(self) -> str:
         now = datetime.now()
         context = self.device_context.strip() or "No live device context is available."
+        place = f"The user's home is in {self.settings.location}. " if self.settings.location else ""
         return (
             f"{self.settings.system_prompt} "
+            f"{place}"
             f"The current date and time is {now:%A, %B %d, %Y at %I:%M %p}. "
             "Use that when asked about the date or time; do not guess. "
             "You can set alarms and timers, change media volume, and control Spotify playback "

@@ -3,9 +3,15 @@ uvicorn==0.54.0
 httpx>=0.28,<1
 numpy>=2.0,<3
 onnxruntime==1.31.1
-openwakeword==0.6.0
 faster-whisper==1.2.1
 piper-tts==1.8.0
 webrtcvad-wheels==2.0.14.post1
 python-dotenv>=1.0,<2
 websockets>=13,<16
+# openwakeword runtime deps (installed here because openwakeword itself is
+# installed with --no-deps: it pins tflite-runtime, which has no wheels on
+# Python 3.12+; we use its ONNX backend instead)
+tqdm>=4.64,<5
+scipy>=1.3,<2
+scikit-learn>=1,<2
+requests>=2,<3

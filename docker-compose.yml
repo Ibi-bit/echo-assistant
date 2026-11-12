@@ -1,0 +1,41 @@
+services:
+  assistant:
+    build: .
+    container_name: assistant
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    ports:
+      # Bind to localhost only when Caddy terminates TLS in front (see deploy/cloud.md).
+      - "8765:8765"
+    volumes:
+      # Whisper caches its model here after the first request.
+      - ./server/models:/app/server/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # Optional TLS in front of the relay. Uncomment, set ASSIST_DOMAIN in .env,
+  # and open ports 80/443 in the cloud firewall.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   container_name: caddy
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - assistant
+  #   environment:
+  #     ASSIST_DOMAIN: ${ASSIST_DOMAIN:-localhost}
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+
+# volumes:
+#   caddy_data:
+#   caddy_config:

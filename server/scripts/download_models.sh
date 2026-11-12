@@ -13,7 +13,13 @@ if [ ! -f models/piper/en_US-lessac-medium.onnx ]; then
         "$VOICE_BASE/en_US-lessac-medium.onnx.json"
 fi
 
-.venv/bin/python - <<'PY'
+if [ -x .venv/bin/python ]; then
+    PYTHON=.venv/bin/python
+else
+    PYTHON=python3
+fi
+
+"$PYTHON" - <<'PY'
 import openwakeword.utils as utils
 utils.download_models()
 PY

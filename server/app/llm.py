@@ -16,12 +16,15 @@ class ChatClient:
         base_url: str,
         max_tokens: int,
         disable_reasoning: bool = True,
-        fallback_model: str = "",
+        fallback_models: list[str] | tuple[str, ...] = (),
     ) -> None:
         self.client = client
         self.api_key = api_key
         self.model = model
-        self.fallback_model = (fallback_model or "").strip()
+        self.fallbacks = [
+            m for m in dict.fromkeys((m.strip() for m in fallback_models if m and m.strip()))
+            if m != model
+        ]
         self.system_prompt = system_prompt
         self.base_url = base_url.rstrip("/")
         self.max_tokens = max_tokens
@@ -37,21 +40,23 @@ class ChatClient:
         """Stream content deltas, collecting any tool calls into last_tool_calls.
 
         Tries ``model`` first. If that call errors before any token is yielded
-        (HTTP error, network, empty network stream), retry once with
-        ``fallback_model`` when configured so a backup model keeps the turn alive.
+        (HTTP error, network, empty network stream), retry once with each
+        fallback in order so a backup model keeps the turn alive.
         """
         yielded = False
-        try:
-            async for chunk in self._stream_with(self.model, messages, tools):
-                yielded = True
-                yield chunk
-        except Exception as primary_exc:
-            if yielded:
-                raise
-            if not self.fallback_model or self.fallback_model == self.model:
-                raise
-            async for chunk in self._stream_with(self.fallback_model, messages, tools):
-                yield chunk
+        last_error: Exception | None = None
+        for model in [self.model, *self.fallbacks]:
+            try:
+                async for chunk in self._stream_with(model, messages, tools):
+                    yielded = True
+                    yield chunk
+                return
+            except Exception as exc:
+                if yielded:
+                    raise
+                last_error = exc
+        if last_error is not None:
+            raise last_error
 
     async def _stream_with(
         self,
