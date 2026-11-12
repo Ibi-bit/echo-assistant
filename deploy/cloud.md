@@ -136,3 +136,17 @@ With `deepseek/deepseek-v4-flash` as the primary model, a typical day of voice
 use (a few dozen short turns) costs cents per month at $0.022/M input and
 $0.40/M output. The free Nemotron fallbacks cover outages. The VM itself is $0
 on Oracle Always Free.
+
+## Tencent Cloud Lighthouse (what we actually use)
+
+A 2 vCPU / 2 GB Lighthouse instance in Ubuntu 24.04 runs the whole stack in ~800 MB.
+Open TCP 8765 in the Lighthouse console (**防火墙 / Firewall → Add rule**, custom TCP),
+then deploy from this machine with:
+
+```bash
+./deploy/push.sh <public-ip> ubuntu ~/.ssh/oracle-assistant.key
+```
+
+The script prints the tablet relay URL (`ws://IP:8765/ws?token=...`) and the settings
+page URL. The service is a system unit (`/etc/systemd/system/assistant.service`), so it
+starts on boot and restarts on failure without any login.
