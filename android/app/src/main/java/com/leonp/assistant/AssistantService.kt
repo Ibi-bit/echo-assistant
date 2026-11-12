@@ -72,6 +72,12 @@ class AssistantService : Service(), RelayClient.Listener {
     private var running = false
 
     private var speaking = false
+
+    // Stop uploading microphone audio while the assistant is thinking or
+    // talking: the server discards it anyway, and a burst of queued chunks
+    // would otherwise eat the next listening window.
+    @Volatile
+    private var micGate = true
     private var speechClockStarted = false
     private var speechFrames = 0L
 
@@ -154,7 +160,7 @@ class AssistantService : Service(), RelayClient.Listener {
 
         audio = AudioEngine(
             onChunk = { chunk ->
-                relay?.sendAudio(chunk)
+                if (micGate) relay?.sendAudio(chunk)
                 main.post { overlay.setLevel(rmsNorm(chunk)) }
             },
             onPlaybackDone = {
@@ -248,6 +254,7 @@ class AssistantService : Service(), RelayClient.Listener {
 
             "state" -> when (event.optString("value")) {
                 "idle" -> {
+                    micGate = true
                     speaking = false
                     overlay.endSpeech()
                     overlay.setIcon("idle")
@@ -257,17 +264,20 @@ class AssistantService : Service(), RelayClient.Listener {
                 }
 
                 "listening" -> {
+                    micGate = true
                     overlay.setIcon("listening")
                     overlay.setState("Listening…")
                     overlay.clearDetail()
                 }
 
                 "thinking" -> {
+                    micGate = false
                     overlay.setIcon("thinking")
                     overlay.setState("Thinking…")
                 }
 
                 "speaking" -> {
+                    micGate = false
                     speaking = true
                     speechClockStarted = false
                     speechFrames = 0L

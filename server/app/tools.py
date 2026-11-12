@@ -98,6 +98,17 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "stop_listening",
+            "description": (
+                "Stop the conversation and go back to waiting for the wake word. "
+                "Use when the user says stop listening, that's all, never mind, or shut up."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_volume",
             "description": "Read the tablet's current media volume percentage.",
             "parameters": {"type": "object", "properties": {}},

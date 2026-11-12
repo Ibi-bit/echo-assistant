@@ -5,6 +5,7 @@ import html
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from enum import Enum
 
@@ -90,6 +91,11 @@ def _regex_action(text: str) -> tuple[str, dict] | None:
         ("what ", "how ", "when ", "which ", "why ", "is ", "are ", "did ", "do ",
          "can you tell", "tell me", "how much", "how loud")
     )
+
+    if re.search(r"\b(stop|quit|exit)\s+(listening|the conversation)\b", core) or re.search(
+        r"\b(shut\s*up|be\s+quiet|that\s+s\s+all|that\s+is\s+all|never\s*mind)\b", core
+    ):
+        return "stop_listening", {}
 
     # Strip leading fillers so imperative detection sees the verb.
     imp = core
@@ -219,7 +225,15 @@ class AssistantSession:
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._command_seq = 0
         self._context_seen = False
+        self._audio_bytes = 0
+        self._audio_log_at = time.monotonic()
+        self._followup = False
         self._want_continue = False
+        self._want_stop = False
+        # Conversation mode: opened by continue_listening, stays open across
+        # turns until a follow-up window expires without speech.
+        self._conversation = False
+        self._followup_deadline = 0.0
 
         prompt = self._system_prompt()
         self.chat = ChatClient(
@@ -261,6 +275,9 @@ class AssistantSession:
             "is playing; it may be a few seconds old. "
             "If the user asks you to keep listening, stay on, or continue without a wake word, "
             "call the continue_listening tool in the same response as any other tool. "
+            "If the user tells you to stop listening, that's all, never mind, or shut up, "
+            "call the stop_listening tool and say nothing more. "
+            f"Your wake word is '{self.settings.wake_words[0] if self.settings.wake_words else 'Hey Jarvis'}'. "
             "For current or time-sensitive information — weather, news, sports, prices, recent "
             "events — or any fact you are unsure of, call the search tool before answering; "
             "answer from its results in plain spoken English, without citing URLs. For facts "
@@ -334,14 +351,28 @@ class AssistantSession:
             # Typed input: bypasses wake word + STT for testing, then runs the
             # exact same turn (LLM, tools, TTS) as a spoken utterance.
             typed = str(message.get("text") or "").strip()
-            if typed and self.state is State.IDLE:
+            if typed and self.state in (State.IDLE, State.LISTENING):
+                # Typing while the mic is open behaves like speaking.
+                self._segmenter = None
                 await self._set_state(State.THINKING)
                 self._utterance_task = asyncio.create_task(self._handle_text(typed))
         elif kind == "listen":
             if self.state is State.IDLE:
+                self._conversation = False
                 await self._start_listening(manual=True)
 
     async def _on_audio(self, data: bytes) -> None:
+        now = time.monotonic()
+        self._audio_bytes += len(data)
+        if now - self._audio_log_at >= 2.0:
+            log.debug(
+                "audio in: %.0f kB in %.1fs",
+                self._audio_bytes / 1024,
+                now - self._audio_log_at,
+            )
+            self._audio_bytes = 0
+            self._audio_log_at = now
+
         if self.state is State.IDLE:
             self._pcm.extend(data)
             while len(self._pcm) >= WAKE_CHUNK_BYTES:
@@ -351,6 +382,7 @@ class AssistantSession:
                 hit = self.wake.detect(chunk)
                 if hit:
                     log.info("wake word=%s score=%.3f", hit[0], hit[1])
+                    self._conversation = False
                     await self._start_listening(manual=False, word=hit[0])
                     return
 
@@ -358,8 +390,28 @@ class AssistantSession:
             result = self._segmenter.feed(data)
             if result is None:
                 return
+            frames = len(self._segmenter.frames) if self._segmenter else -1
             self._segmenter = None
             if not result:
+                remaining = int((self._followup_deadline - time.monotonic()) * 1000)
+                if remaining > 500:
+                    # A cough or a door slam is not an answer: keep the window
+                    # open instead of dropping back to the wake word.
+                    log.info(
+                        "short blip ignored (frames=%d, %dms left in window)",
+                        frames,
+                        remaining,
+                    )
+                    self._segmenter = self._make_segmenter(remaining)
+                    return
+                if self._followup:
+                    log.info(
+                        "follow-up window expired without speech (frames=%d)",
+                        frames,
+                    )
+                    self._conversation = False
+                    await self._back_to_idle()
+                    return
                 log.info("no speech after wake")
                 await self._send({"type": "notice", "text": "I didn't catch that."})
                 await self._back_to_idle()
@@ -369,19 +421,32 @@ class AssistantSession:
 
     # ------------------------------------------------------------------ pipeline
 
-    async def _start_listening(self, manual: bool, word: str | None = None) -> None:
+    def _make_segmenter(self, no_speech_ms: int) -> Segmenter:
+        return Segmenter(
+            aggressiveness=self.settings.vad_aggressiveness,
+            end_silence_ms=self.settings.end_silence_ms,
+            max_ms=self.settings.max_utterance_ms,
+            no_speech_ms=no_speech_ms,
+        )
+
+    async def _start_listening(
+        self,
+        manual: bool,
+        word: str | None = None,
+        followup: bool = False,
+    ) -> None:
         if self.state is not State.IDLE:
             return
         self.wake.reset()
         self._pcm.clear()
         self._audio_sent = 0
         self._playback_done.clear()
-        self._segmenter = Segmenter(
-            aggressiveness=self.settings.vad_aggressiveness,
-            end_silence_ms=self.settings.end_silence_ms,
-            max_ms=self.settings.max_utterance_ms,
-            no_speech_ms=self.settings.no_speech_timeout_ms,
+        self._followup = followup
+        window = (
+            self.settings.continue_listen_ms if followup else self.settings.no_speech_timeout_ms
         )
+        self._followup_deadline = time.monotonic() + window / 1000
+        self._segmenter = self._make_segmenter(window)
         if manual:
             await self._send({"type": "manual"})
         else:
@@ -549,9 +614,16 @@ class AssistantSession:
                     log.debug("playback_done not received in %.1fs", timeout)
 
             await self._back_to_idle()
-            if self._want_continue:
+            if self._want_stop:
+                self._want_stop = False
                 self._want_continue = False
-                await self._start_listening(manual=True)
+                self._conversation = False
+            elif self._want_continue:
+                self._want_continue = False
+                self._conversation = True
+            if self._conversation:
+                log.info("conversation mode: listening again")
+                await self._start_listening(manual=True, followup=True)
 
         except asyncio.CancelledError:
             raise
@@ -624,7 +696,13 @@ class AssistantSession:
 
         if name == "continue_listening":
             self._want_continue = True
+            self._want_stop = False
             return {"ok": True, "message": "Continuing to listen."}
+
+        if name == "stop_listening":
+            self._want_stop = True
+            self._want_continue = False
+            return {"ok": True, "message": "Stopped listening."}
 
         if name == "search":
             query = str(args.get("query") or "").strip()
@@ -758,6 +836,7 @@ class AssistantSession:
 
     async def _back_to_idle(self) -> None:
         self._segmenter = None
+        self._followup = False
         self._pcm.clear()
         self._preroll.drain()
         self.wake.reset()

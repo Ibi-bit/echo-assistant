@@ -36,8 +36,17 @@ cd "$HOME/echo-assistant/server"
 
 # keep the relay token stable across re-deploys
 current=$(sed -n 's/^ASSIST_TOKEN="\{0,1\}\([^"#]*\)"\{0,1\}$/\1/p' .env 2>/dev/null | head -1 || true)
+if [ -z "${current:-}" ] && [ -f "$HOME/.assist_token" ]; then
+    current=$(cat "$HOME/.assist_token")
+fi
 if [ -z "${current:-}" ]; then
     current=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
+    if grep -q '^ASSIST_TOKEN=' .env 2>/dev/null; then
+        sed -i "s|^ASSIST_TOKEN=.*|ASSIST_TOKEN=$current|" .env
+    else
+        printf '\nASSIST_TOKEN=%s\n' "$current" >> .env
+    fi
+elif ! grep -q "^ASSIST_TOKEN=$current$" .env 2>/dev/null; then
     if grep -q '^ASSIST_TOKEN=' .env 2>/dev/null; then
         sed -i "s|^ASSIST_TOKEN=.*|ASSIST_TOKEN=$current|" .env
     else
@@ -65,6 +74,7 @@ WantedBy=multi-user.target
 UNIT
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable --now assistant
+$SUDO systemctl restart assistant
 
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q 'Status: active'; then
     $SUDO ufw allow 8765/tcp >/dev/null

@@ -53,6 +53,9 @@ class Settings:
     end_silence_ms: int = field(default_factory=lambda: _int("END_SILENCE_MS", 900))
     max_utterance_ms: int = field(default_factory=lambda: _int("MAX_UTTERANCE_MS", 15000))
     no_speech_timeout_ms: int = field(default_factory=lambda: _int("NO_SPEECH_TIMEOUT_MS", 6000))
+    # Longer window after the user asks to keep listening, so they have time
+    # to think without needing the wake word again.
+    continue_listen_ms: int = field(default_factory=lambda: _int("CONTINUE_LISTEN_MS", 30000))
 
     whisper_model: str = field(default_factory=lambda: _env("WHISPER_MODEL", "base.en"))
     whisper_device: str = field(default_factory=lambda: _env("WHISPER_DEVICE", "cpu"))
