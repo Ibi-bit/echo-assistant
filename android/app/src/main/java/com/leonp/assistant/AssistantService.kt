@@ -217,7 +217,22 @@ class AssistantService : Service(), RelayClient.Listener {
             audio?.enqueueEnd()
             return
         }
+        if (kind == "stop_audio") {
+            main.post { handleInterrupt() }
+            return
+        }
         main.post { handleEvent(kind, event) }
+    }
+
+    private fun handleInterrupt() {
+        // Barge-in: stop TTS playback immediately and go back to listening.
+        audio?.interrupt()
+        replyText.setLength(0)
+        overlay.setIcon("listening")
+        overlay.setState("Hey Jarvis")
+        overlay.clearDetail()
+        // Request a fresh listening window from the server.
+        relay?.sendJson("""{"type":"listen"}""")
     }
 
     private fun handleEvent(kind: String, event: JSONObject) {

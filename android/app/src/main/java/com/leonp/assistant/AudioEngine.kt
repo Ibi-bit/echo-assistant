@@ -243,6 +243,16 @@ class AudioEngine(
         queue.clear()
     }
 
+    /** Interrupts playback immediately (barge-in). Keeps mic running. */
+    fun interrupt() {
+        playRunning = false
+        track?.stop()
+        track?.release()
+        track = null
+        queue.clear()
+        // onPlaybackDone is NOT called — the session handles the state transition.
+    }
+
     companion object {
         const val INPUT_RATE = 16000
         const val OUTPUT_RATE = 22050

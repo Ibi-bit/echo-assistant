@@ -360,6 +360,12 @@ class AssistantSession:
             if self.state is State.IDLE:
                 self._conversation = False
                 await self._start_listening(manual=True)
+            elif self.state is State.SPEAKING:
+                # Manual barge-in from tablet (e.g., tap-to-talk button).
+                log.info("manual interrupt during SPEAKING")
+                await self._interrupt()
+                self._conversation = False
+                await self._start_listening(manual=True)
 
     async def _on_audio(self, data: bytes) -> None:
         now = time.monotonic()
@@ -372,6 +378,20 @@ class AssistantSession:
             )
             self._audio_bytes = 0
             self._audio_log_at = now
+
+        # Barge-in: wake word during SPEAKING interrupts TTS.
+        if self.state is State.SPEAKING:
+            self._pcm.extend(data)
+            while len(self._pcm) >= WAKE_CHUNK_BYTES:
+                chunk = bytes(self._pcm[:WAKE_CHUNK_BYTES])
+                del self._pcm[:WAKE_CHUNK_BYTES]
+                hit = self.wake.detect(chunk)
+                if hit:
+                    log.info("barge-in wake word=%s score=%.3f", hit[0], hit[1])
+                    await self._interrupt()
+                    self._conversation = False
+                    await self._start_listening(manual=False, word=hit[0])
+                    return
 
         if self.state is State.IDLE:
             self._pcm.extend(data)
@@ -538,15 +558,14 @@ class AssistantSession:
                         break
                     # Refresh the clock and device context for every round.
                     messages[0]["content"] = self._system_prompt()
+                    round_text = ""
                     async for delta in self.chat.stream(messages, tools=TOOL_SCHEMAS):
                         if self._closed:
                             break
-                        parts.append(delta)
-                        await self._send({"type": "delta", "text": delta})
-                        for sentence in sentence_buffer.feed(delta):
-                            await queue.put(sentence)
-                    for sentence in sentence_buffer.flush():
-                        await queue.put(sentence)
+                        # Keep the round private until we know whether it ends in a
+                        # tool call. Narration before a tool call ("Let me check…")
+                        # is process noise, not an answer, and used to be spoken.
+                        round_text += delta
                     if self._closed:
                         break
 
@@ -556,7 +575,17 @@ class AssistantSession:
                         if str((call.get("function") or {}).get("name") or "")
                     ]
                     if not calls:
+                        text = self._clean_reply(round_text)
+                        if text:
+                            parts.append(text)
+                            await self._send({"type": "delta", "text": text})
+                            for sentence in sentence_buffer.feed(text):
+                                await queue.put(sentence)
+                            for sentence in sentence_buffer.flush():
+                                await queue.put(sentence)
                         break
+                    if round_text.strip():
+                        log.info("dropped pre-tool narration: %r", round_text.strip()[:120])
                     log.info("tools: %s", [str((c.get("function") or {}).get("name")) for c in calls])
                     for call in calls:
                         if not call.get("id"):
@@ -712,6 +741,33 @@ class AssistantSession:
 
         return {"ok": False, "message": "I don't know how to do that yet."}
 
+    _META_PREFIX = re.compile(
+        r"^(?:based on|from|according to|looking at) (?:the )?device "
+        r"(?:context|status|data|snapshot|state)[,:]?\s*",
+        re.IGNORECASE,
+    )
+    _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+    @classmethod
+    def _clean_reply(cls, text: str) -> str:
+        """Drop filler preambles and repeated sentences before speaking."""
+        text = re.sub(r"[ \t]+", " ", text.replace("\r", ""))
+        text = re.sub(r"\n{2,}", "\n", text).strip()
+        if not text:
+            return ""
+        out: list[str] = []
+        seen: set[str] = set()
+        for sentence in cls._SENTENCE_SPLIT.split(text):
+            sentence = cls._META_PREFIX.sub("", sentence).strip()
+            if not sentence:
+                continue
+            key = re.sub(r"[^a-z0-9 ]", "", sentence.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sentence)
+        return cls._META_PREFIX.sub("", " ".join(out)).strip()
+
     @staticmethod
     def _as_int(value: object) -> int | None:
         if isinstance(value, bool):
@@ -721,13 +777,52 @@ class AssistantSession:
         except (TypeError, ValueError):
             return None
 
-    async def _web_search(self, query: str) -> dict:
-        """Server-side, no-key web lookup (DuckDuckGo HTML, JSON instant-answer fallback).
+    async def _fetch_wttr(self, location: str) -> str | None:
+        """Fetch concise current weather from wttr.in (no API key, JSON)."""
+        import urllib.parse
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                response = await client.get(
+                    f"https://wttr.in/{urllib.parse.quote(location)}?format=j1"
+                )
+                response.raise_for_status()
+                data = response.json()
+                current = data.get("current_condition", [{}])[0]
+                area = data.get("nearest_area", [{}])[0]
+                temp_c = current.get("temp_C")
+                temp_f = current.get("temp_F")
+                desc = current.get("weatherDesc", [{}])[0].get("value", "").lower()
+                humidity = current.get("humidity")
+                wind_kph = current.get("windspeedKmph")
+                wind_dir = current.get("winddir16Point")
+                place = area.get("areaName", [{}])[0].get("value", location)
+                if temp_c is None:
+                    return None
+                parts = [
+                    f"{place}: {temp_c}°C ({temp_f}°F)",
+                    desc,
+                ]
+                if humidity:
+                    parts.append(f"humidity {humidity}%")
+                if wind_kph:
+                    parts.append(f"wind {wind_kph} km/h {wind_dir}")
+                return "Right now, " + ", ".join(parts) + "."
+        except Exception:
+            log.debug("wttr.in failed for %r", location)
+            return None
 
-        Returns the top results as one compact message so the model can answer
-        and speak the answer. Kept deliberately tiny: the tablet has no key
-        store and the voice path pays latency per round trip.
-        """
+    async def _web_search(self, query: str) -> dict:
+        """Server-side web lookup with a fast wttr.in path for weather queries."""
+        q = query.lower()
+        # Weather fast-path: if query contains weather terms and we have a location,
+        # try wttr.in first (much cleaner than DDG HTML parsing).
+        if any(k in q for k in ("weather", "temperature", "forecast", "rain", "sunny", "cloudy")):
+            location = self.settings.location.strip() or None
+            if location:
+                wttr = await self._fetch_wttr(location)
+                if wttr:
+                    return {"ok": True, "message": wttr}
+        # Fallback to DuckDuckGo.
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
@@ -742,7 +837,6 @@ class AssistantSession:
                     results = self._parse_ddg_results(response.text)
                     if results:
                         return {"ok": True, "message": self._format_results(query, results)}
-                # Odd-shaped or blocked page: try the instant-answer JSON API.
                 response = await client.get(
                     "https://api.duckduckgo.com/",
                     params={"q": query, "format": "json", "no_html": 1},
@@ -837,6 +931,22 @@ class AssistantSession:
     async def _back_to_idle(self) -> None:
         self._segmenter = None
         self._followup = False
+        self._pcm.clear()
+        self._preroll.drain()
+        self.wake.reset()
+        await self._set_state(State.IDLE)
+
+    async def _interrupt(self) -> None:
+        """Cancel current TTS playback and transition to listening."""
+        if self._utterance_task and not self._utterance_task.done():
+            self._utterance_task.cancel()
+            try:
+                await self._utterance_task
+            except asyncio.CancelledError:
+                pass
+        # Tell the tablet to stop audio playback immediately.
+        await self._send({"type": "stop_audio"})
+        # Drain any pending audio queue.
         self._pcm.clear()
         self._preroll.drain()
         self.wake.reset()

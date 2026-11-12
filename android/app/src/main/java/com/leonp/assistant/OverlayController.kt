@@ -8,7 +8,6 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.SystemClock
 import android.text.SpannableString
-import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.util.TypedValue
@@ -16,6 +15,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.min
@@ -111,6 +111,17 @@ class StatusIconView(context: Context) : View(context) {
 }
 
 /**
+ * ScrollView that wraps its content but never grows taller than [maxHeightPx],
+ * so a long reply is scrollable instead of clipped.
+ */
+private class MaxHeightScrollView(context: Context, private val maxHeightPx: Int) : ScrollView(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val capped = MeasureSpec.makeMeasureSpec(maxHeightPx, MeasureSpec.AT_MOST)
+        super.onMeasure(widthMeasureSpec, capped)
+    }
+}
+
+/**
  * The assistant's only on-screen presence: a small, non-focusable card over Rusty.
  * Touches outside the card go straight through to Rusty.
  */
@@ -128,6 +139,7 @@ class OverlayController(
     private var icon: StatusIconView? = null
     private var status: TextView? = null
     private var detail: TextView? = null
+    private var detailScroll: ScrollView? = null
     private var hideDetail: Runnable? = null
 
     private var speechStartMs = 0L
@@ -187,17 +199,23 @@ class OverlayController(
         val body = TextView(appContext).apply {
             setTextColor(0xFFE2E8F0.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            maxWidth = dp(640)
-            maxLines = 4
-            ellipsize = TextUtils.TruncateAt.END
+            maxWidth = dp(760)
             gravity = Gravity.CENTER
             setLineSpacing(0f, 1.1f)
             visibility = View.GONE
         }
 
+        // Long replies stay readable: the card grows to a limit, then scrolls
+        // (drag inside the card) instead of cutting the text with an ellipsis.
+        val bodyScroll = MaxHeightScrollView(appContext, dp(300)).apply {
+            isVerticalScrollBarEnabled = false
+            visibility = View.GONE
+            addView(body)
+        }
+
         container.addView(header)
         container.addView(
-            body,
+            bodyScroll,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -227,6 +245,7 @@ class OverlayController(
         icon = iconView
         status = label
         detail = body
+        detailScroll = bodyScroll
     }
 
     fun setState(text: String) = main.post {
@@ -247,12 +266,16 @@ class OverlayController(
         hideDetail?.let { main.removeCallbacks(it) }
         hideDetail = null
         val body = detail ?: return@post
+        val scroll = detailScroll
         if (text.isBlank()) {
             body.text = ""
             body.visibility = View.GONE
+            scroll?.visibility = View.GONE
         } else {
             body.text = text
             body.visibility = View.VISIBLE
+            scroll?.visibility = View.VISIBLE
+            scroll?.scrollTo(0, 0)
         }
     }
 
@@ -261,18 +284,23 @@ class OverlayController(
         hideDetail = null
         detail?.text = ""
         detail?.visibility = View.GONE
+        detailScroll?.visibility = View.GONE
     }
 
     /** Leaves the last reply on screen briefly, then returns to the compact idle pill. */
-    fun clearDetailSoon(delayMs: Long = 6000) = main.post {
+    fun clearDetailSoon(delayMs: Long = 15000) = main.post {
         hideDetail?.let { main.removeCallbacks(it) }
+        val text = detail?.text?.toString().orEmpty()
+        // Long answers get extra reading time.
+        val extra = if (text.length > 120) 10000L else 0L
         val runnable = Runnable {
             detail?.text = ""
             detail?.visibility = View.GONE
+            detailScroll?.visibility = View.GONE
             hideDetail = null
         }
         hideDetail = runnable
-        main.postDelayed(runnable, delayMs)
+        main.postDelayed(runnable, delayMs + extra)
     }
 
     /** Call when the first reply audio chunk starts playing. */
@@ -345,6 +373,7 @@ class OverlayController(
         icon = null
         status = null
         detail = null
+        detailScroll = null
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(
