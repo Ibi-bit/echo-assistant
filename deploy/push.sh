@@ -14,8 +14,16 @@ echo "== copying server to $TARGET_USER@$HOST"
 "${SSH[@]}" 'mkdir -p ~/echo-assistant/server'
 rsync -az --delete \
     --exclude '.venv' --exclude 'models' --exclude '__pycache__' --exclude '*.pyc' \
+    --exclude '.env' \
     -e "ssh -o StrictHostKeyChecking=accept-new -i $KEY" \
     server/ "$TARGET_USER@$HOST:echo-assistant/server/"
+
+# Seed a fresh server from the local .env once; never overwrite live settings.
+if [ -f server/.env ]; then
+    rsync -az --ignore-existing \
+        -e "ssh -o StrictHostKeyChecking=accept-new -i $KEY" \
+        server/.env "$TARGET_USER@$HOST:echo-assistant/server/.env"
+fi
 
 echo "== installing packages, venv, models (a few minutes)"
 "${SSH[@]}" "TARGET_USER=$TARGET_USER bash -s" <<'REMOTE'
@@ -90,6 +98,10 @@ echo "== health"
 
 TOKEN=$("${SSH[@]}" 'cat "$HOME/.assist_token"')
 echo
+if [ "${ASSIST_QUIET:-}" = "1" ]; then
+    echo "deploy complete"
+    exit 0
+fi
 echo "token:         $TOKEN"
 if [ -n "${ASSIST_DOMAIN:-}" ]; then
     echo "tablet relay:  wss://$ASSIST_DOMAIN/ws?token=$TOKEN"

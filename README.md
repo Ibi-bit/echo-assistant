@@ -81,7 +81,9 @@ The desktop must stay awake. `loginctl enable-linger "$USER"` lets the user serv
 (4 OCPU / 24 GB, $0), install, systemd or Docker, and free TLS with
 Caddy + DuckDNS or a Cloudflare Tunnel. The relay must stay awake; free PaaS
 tiers that sleep when idle will not work. A `Dockerfile` and
-`docker-compose.yml` are included.
+`docker-compose.yml` are included. Pushes to `main` can deploy automatically
+after CI: set the `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_SSH_KEY` repository
+secrets (see `deploy/cloud.md`).
 
 ### Rebuild models from scratch
 

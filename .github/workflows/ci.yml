@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
 
 jobs:
   test:
@@ -14,4 +15,4 @@ jobs:
           python-version: "3.12"
       - run: pip install -r server/requirements-dev.txt
       - run: pytest server/tests
-      - run: ruff check server/app/intents.py server/app/search.py server/app/config.py server/tests
+      - run: ruff check server/app/intents.py server/app/search.py server/app/config.py server/app/main.py server/app/webconfig.py server/tests

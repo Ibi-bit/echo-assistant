@@ -156,3 +156,29 @@ ASSIST_DOMAIN=myassistant.duckdns.org \
 The script prints the tablet `wss://` relay URL and the settings page URL. The
 service is a system unit (`/etc/systemd/system/assistant.service`), so it starts
 on boot and restarts on failure without any login.
+
+### Deploy from GitHub Actions
+
+`.github/workflows/deploy.yml` runs CI, then calls `deploy/push.sh` on pushes to
+`main` that touch `server/` or `deploy/`. It can also be started manually from
+the Actions tab.
+
+Add these repository secrets:
+
+- `DEPLOY_HOST` — public IP or hostname
+- `DEPLOY_USER` — SSH user (defaults to `ubuntu` when unset)
+- `DEPLOY_SSH_KEY` — private key for that user
+
+Optional repository variable: `ASSIST_DOMAIN` (for example
+`myassistant.duckdns.org`). The key needs SSH access and passwordless `sudo`,
+because the script installs packages, restarts the system service, and edits
+firewall rules. Use a dedicated deploy key, not your personal key. The job uses
+the `production` environment, so you can add required reviewers there if you
+want manual approval before each deploy.
+
+The workflow does not copy your local `.env`; it preserves the server's
+`~/echo-assistant/server/.env`. On a fresh host, create that file once with
+`OPENROUTER_API_KEY` set (or run `push.sh` manually first). The deploy log does
+not print the relay token; read it from `~/.assist_token` on the server.
+`push.sh` does not install Caddy, so set up TLS first. Until the deploy secrets
+are present, the deploy job skips with a warning instead of failing the build.
