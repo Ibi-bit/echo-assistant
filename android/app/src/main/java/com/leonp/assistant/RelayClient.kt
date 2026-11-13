@@ -39,10 +39,11 @@ class RelayClient(
             listener.onClosed(this@RelayClient, "Invalid relay URL", false)
             return
         }
-        if (uri.scheme == "ws" && !isPrivateHost(uri.host)) {
+        val scheme = uri.scheme?.lowercase()
+        if ((scheme == "ws" || scheme == "http") && !isPrivateHost(uri.host)) {
             listener.onClosed(
                 this@RelayClient,
-                "Cleartext ws:// is only allowed on the LAN; use wss:// for a public host",
+                "Cleartext ws:// or http:// is only allowed on the LAN; use wss:// for a public host",
                 false,
             )
             return
