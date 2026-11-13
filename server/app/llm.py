@@ -12,7 +12,6 @@ class ChatClient:
         client: httpx.AsyncClient,
         api_key: str,
         model: str,
-        system_prompt: str,
         base_url: str,
         max_tokens: int,
         disable_reasoning: bool = True,
@@ -25,7 +24,6 @@ class ChatClient:
             m for m in dict.fromkeys((m.strip() for m in fallback_models if m and m.strip()))
             if m != model
         ]
-        self.system_prompt = system_prompt
         self.base_url = base_url.rstrip("/")
         self.max_tokens = max_tokens
         self.disable_reasoning = disable_reasoning

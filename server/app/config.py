@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,45 @@ from dotenv import load_dotenv
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(SERVER_DIR / ".env")
+
+
+_PRIVATE_NETS = tuple(
+    ipaddress.ip_network(net)
+    for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+
+
+def is_local_host(host: str) -> bool:
+    """True for loopback/private LAN addresses (and localhost).
+
+    Deliberately not ``ipaddress.is_private``: Python 3.14 also marks
+    documentation ranges such as 203.0.113.0/24 as private.
+    """
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_link_local or any(ip in net for net in _PRIVATE_NETS)
+
+
+def is_local_request(peer_host: str, forwarded_for: str = "") -> bool:
+    """True for loopback/LAN clients, including a local reverse proxy.
+
+    A public client cannot spoof its way in: the direct peer must be local
+    before X-Forwarded-For is considered. A private peer with a forwarded
+    header is a proxy (host or Docker), so use the original client address.
+    """
+    if not is_local_host(peer_host):
+        return False
+    if forwarded_for:
+        return is_local_host(forwarded_for.split(",", 1)[0].strip())
+    return True
 
 
 def _env(name: str, default: str) -> str:
@@ -70,9 +110,6 @@ class Settings:
     )
     model: str = field(
         default_factory=lambda: _env("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free")
-    )
-    fallback_model: str = field(
-        default_factory=lambda: _env("OPENROUTER_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning:free")
     )
     fallback_models: tuple[str, ...] = field(
         default_factory=lambda: _words(

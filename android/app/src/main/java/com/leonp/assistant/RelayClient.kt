@@ -8,6 +8,8 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+import java.net.URI
+import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
 
 class RelayClient(
@@ -31,7 +33,33 @@ class RelayClient(
     private var open = false
 
     fun connect() {
-        val request = Request.Builder().url(url).build()
+        val uri = try {
+            URI(url)
+        } catch (_: Exception) {
+            listener.onClosed(this@RelayClient, "Invalid relay URL", false)
+            return
+        }
+        if (uri.scheme == "ws" && !isPrivateHost(uri.host)) {
+            listener.onClosed(
+                this@RelayClient,
+                "Cleartext ws:// is only allowed on the LAN; use wss:// for a public host",
+                false,
+            )
+            return
+        }
+        val token = uri.rawQuery
+            ?.split("&")
+            ?.firstOrNull { it.startsWith("token=") }
+            ?.removePrefix("token=")
+            ?.let { URLDecoder.decode(it, "UTF-8") }
+        // Keep the token out of the URL (and access logs); send it as a header.
+        val endpoint = url
+            .replace(Regex("([?&])token=[^&]*"), "$1")
+            .replace("?&", "?")
+            .trimEnd('?', '&')
+        val request = Request.Builder().url(endpoint).apply {
+            if (token != null) header("Authorization", "Bearer $token")
+        }.build()
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 open = true
@@ -78,4 +106,18 @@ class RelayClient(
     }
 
     fun sendJson(json: String): Boolean = socket?.send(json) ?: false
+
+    private fun isPrivateHost(host: String?): Boolean {
+        if (host == null) return false
+        val bare = host.removeSurrounding("[", "]").lowercase()
+        if (bare == "localhost" || bare == "::1") return true
+        val parts = bare.split(".")
+        if (parts.size != 4) return false
+        val octets = parts.map { it.toIntOrNull() ?: return false }
+        if (octets.any { it !in 0..255 }) return false
+        return octets[0] == 10 || octets[0] == 127 ||
+            (octets[0] == 172 && octets[1] in 16..31) ||
+            (octets[0] == 192 && octets[1] == 168) ||
+            (octets[0] == 169 && octets[1] == 254)
+    }
 }

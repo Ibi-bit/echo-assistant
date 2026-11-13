@@ -24,6 +24,7 @@
     </queries>
 
     <application
+        android:allowBackup="false"
         android:label="Assistant"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">

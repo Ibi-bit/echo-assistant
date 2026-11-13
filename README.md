@@ -35,10 +35,12 @@ only ever sees text.
   Rusty state, what Spotify is playing (title/artist/position), next alarm and
   running timers. A compact snapshot is pushed every 5 s and injected into the
   prompt, so "what's playing?" and "how much battery?" work without tools.
-- **Web search** — weather, news, sports and anything time-sensitive goes
-  through DuckDuckGo and is answered in plain speech.
+- **Web search** — weather goes straight to wttr.in; news, sports and other
+  time-sensitive questions go through DuckDuckGo, answered in plain speech.
 - **Keep listening** — "and keep listening" keeps the mic open for a follow-up
   without another wake word.
+- **Barge-in** — say the wake word while the assistant is thinking or speaking
+  to cancel that turn and ask something else.
 
 Short imperatives ("pause", "mute", "timer for 5 minutes") are routed by a
 deterministic regex before the model sees them, so they still work when a small
@@ -96,12 +98,15 @@ There is a settings page served by the assistant itself:
 
 It edits model and fallbacks, API key, wake word/threshold, Whisper model, Piper
 voice, turn-taking timings, home city, system prompt, history and reply limits,
-and the relay token. **Save & restart** writes `server/.env`, restarts the
-systemd unit, and the tablet reconnects on its own. Secrets are never echoed back
-to the browser; leaving a password field blank keeps the stored value.
+and the relay token. **Save & restart** writes `server/.env`, then exits so
+systemd (`Restart=always`) or Docker's restart policy can bring it back. The
+tablet reconnects on its own. Secrets are never echoed back to the browser;
+leaving a password field blank keeps the stored value.
 
-If `ASSIST_TOKEN` is set, the page asks for it once and stores a cookie. On a
-cloud host put the page behind TLS and the token (see `deploy/cloud.md`).
+If `ASSIST_TOKEN` is set, the page asks for it once and stores a cookie. Without
+a token, the page and WebSocket are limited to loopback and private LAN
+addresses. On a cloud host put the page behind TLS and set the token (see
+`deploy/cloud.md`).
 
 You can still edit `server/.env` directly — copy `server/.env.example` and edit.
 The settings page preserves comments and keys it does not know about, so manual
@@ -120,7 +125,7 @@ entries survive.
 | `END_SILENCE_MS` | `900` | How long a pause ends the question |
 | `HISTORY_TURNS` | `8` | Conversation memory per tablet |
 | `DISABLE_REASONING` | `true` | Keep `true` for Nemotron; otherwise it writes a long reasoning preamble before answering |
-| `ASSIST_TOKEN` | empty | If set, clients must use `ws://host:8765/ws?token=...` and `/config` asks for it |
+| `ASSIST_TOKEN` | empty | If set, clients must send `?token=...` or an `Authorization: Bearer` header; `/config` asks for it. Without it, clients are limited to loopback/private LAN addresses |
 
 ## Tablet
 
@@ -166,7 +171,11 @@ adb shell am start -n com.leonp.assistant/.MainActivity \
     --es relay_url ws://192.168.1.50:8765/ws --ez start true
 ```
 
-Use the desktop's LAN IP, not `127.0.0.1`. For a USB-only test, tunnel the port and point the app at localhost instead. This is only for testing: `adb reverse` does not survive a reboot or unplugging the cable. If 8765 is already in use on the device, map a different local port:
+Use the desktop's LAN IP, not `127.0.0.1`. The `relay_url`/`start` extras only
+work in debug builds; release builds ignore them and use the saved address. For
+a USB-only test, tunnel the port and point the app at localhost instead. This is
+only for testing: `adb reverse` does not survive a reboot or unplugging the
+cable. If 8765 is already in use on the device, map a different local port:
 
 ```bash
 adb reverse tcp:8766 tcp:8765
@@ -183,7 +192,10 @@ Before speaking, the service asks Android for transient audio focus. Apps that h
 1. The tablet streams 80 ms PCM chunks continuously while the relay is connected.
 2. `openWakeWord` scores each chunk (~1.2 ms on this desktop). On a hit the server sends `wake` + `listening` and starts a VAD segmenter.
 3. When the user pauses for `END_SILENCE_MS`, the utterance goes to faster-whisper, then to OpenRouter.
-4. Reply tokens stream to the overlay card and are cut into sentences; each sentence is synthesized by Piper and pushed as raw PCM 22.05 kHz. First audio usually arrives while the model is still writing the end of the reply.
+4. The model's reply is buffered for the round, including any tool calls. Once
+   the round is complete the text is cut into sentences, each sentence is
+   synthesized by Piper, and pushed as raw PCM 22.05 kHz. Audio therefore starts
+   after the model has finished writing the reply, not during generation.
 5. The tablet reports `playback_done` when its speaker queue drains, and only then does the server go back to `idle` — this stops the assistant from waking itself on its own voice.
 
 Reasoning is disabled in the request (`reasoning: {enabled: false}`) unless you turn
@@ -194,5 +206,6 @@ Flash, for example), which is why it is a setting.
 
 - **Free tier:** OpenRouter's free models are rate limited (about 20 requests/min, 50/day without credits, 1,000/day after a one-time $10 top-up). NVIDIA's free endpoint also logs requests to improve its products — don't feed it secrets.
 - **One speaker at a time:** the server serialises Whisper and Piper across sessions, so a second tablet queues behind the first.
-- **No barge-in yet:** saying the wake word while the assistant is speaking is ignored until playback drains. This is deliberate; adding echo cancellation and a cancel path is the next step.
-- **No tools:** the model can't check live weather or control lights yet. Add OpenRouter tool definitions in `server/app/llm.py` and handle them in `pipeline.py` if you want that.
+- **Search is best-effort:** DuckDuckGo's HTML page rate-limits scrapers and wttr.in can be unavailable; the assistant then says it could not reach the web.
+- **LAN traffic is cleartext:** the app accepts `ws://` only for private/LAN addresses. Use `wss://` behind Caddy or Cloudflare Tunnel for a public host.
+- **Settings are local by default:** with no `ASSIST_TOKEN`, `/config` and `/ws` accept only loopback/private-LAN clients. Set a token before exposing the relay to the internet.

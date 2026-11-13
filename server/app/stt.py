@@ -36,4 +36,12 @@ class Transcriber:
             vad_filter=False,
             condition_on_previous_text=False,
         )
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        texts: list[str] = []
+        for segment in segments:
+            # Whisper hallucinates "Thank you." / "you" on near-silence. Only
+            # drop when the model is both unsure there was speech and unsure of
+            # the words, so quiet real speech still gets through.
+            if segment.no_speech_prob > 0.6 and segment.avg_logprob < -1.0:
+                continue
+            texts.append(segment.text.strip())
+        return " ".join(texts).strip()

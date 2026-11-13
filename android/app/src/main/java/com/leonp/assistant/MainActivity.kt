@@ -42,13 +42,19 @@ class MainActivity : Activity() {
         accessStatus = findViewById(R.id.access_status)
         address.setText(settings.relayUrl)
 
-        val requested = intent?.getStringExtra("relay_url")?.trim().orEmpty()
+        val requested = if (BuildConfig.DEBUG) {
+            intent?.getStringExtra("relay_url")?.trim().orEmpty()
+        } else {
+            ""
+        }
         if (requested.isNotEmpty()) {
             settings.relayUrl = requested
             address.setText(requested)
             pendingStart = true
         }
-        if (intent?.getBooleanExtra("start", false) == true) pendingStart = true
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("start", false) == true) {
+            pendingStart = true
+        }
 
         overlayButton.setOnClickListener {
             overlayPrompted = false
@@ -97,7 +103,11 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         maybeRunTest(intent)
-        val requested = intent.getStringExtra("relay_url")?.trim().orEmpty()
+        val requested = if (BuildConfig.DEBUG) {
+            intent.getStringExtra("relay_url")?.trim().orEmpty()
+        } else {
+            ""
+        }
         if (requested.isNotEmpty()) {
             settings.relayUrl = requested
             address.setText(requested)
@@ -189,6 +199,7 @@ class MainActivity : Activity() {
     // without relying on wake-word acoustics through the tiny speaker.
 
     private fun maybeRunTest(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
         // Typed request injection for testing without wake word / mic.
         val query = intent?.getStringExtra("test_text")?.trim().orEmpty()
         if (query.isNotEmpty()) {

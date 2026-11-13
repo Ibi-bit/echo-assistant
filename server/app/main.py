@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
@@ -8,7 +9,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import RedirectResponse
 
 from .audio import WakeWord
-from .config import SERVER_DIR, settings
+from .config import SERVER_DIR, is_local_request, settings
 from .pipeline import AssistantSession
 from .stt import Transcriber
 from .tts import Speaker
@@ -70,7 +71,24 @@ async def health() -> dict:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    if settings.auth_token and websocket.query_params.get("token") != settings.auth_token:
+    if settings.auth_token:
+        auth = websocket.headers.get("authorization", "")
+        supplied = (
+            auth[7:].strip()
+            if auth.lower().startswith("bearer ")
+            else websocket.query_params.get("token")
+            or websocket.headers.get("x-assist-token")
+            or ""
+        )
+        allowed = bool(supplied) and hmac.compare_digest(
+            supplied.encode(), settings.auth_token.encode()
+        )
+    else:
+        peer = websocket.client.host if websocket.client else ""
+        allowed = is_local_request(
+            peer, websocket.headers.get("x-forwarded-for", "")
+        )
+    if not allowed:
         await websocket.close(code=4401)
         return
 

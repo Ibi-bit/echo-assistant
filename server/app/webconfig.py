@@ -7,16 +7,18 @@ the new values load. The tablet reconnects on its own.
 """
 from __future__ import annotations
 
+import hmac
 import html
 import os
+import signal
 import subprocess
 import threading
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from .config import SERVER_DIR, settings
+from .config import SERVER_DIR, is_local_request, settings
 
 router = APIRouter()
 ENV_PATH = SERVER_DIR / ".env"
@@ -185,36 +187,57 @@ def _service_active() -> str:
         result = subprocess.run(
             ["systemctl", "--user", "is-active", "assistant"],
             capture_output=True,
+            check=False,
             text=True,
             timeout=3,
         )
         return result.stdout.strip() or "unknown"
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return "unknown"
 
 
-def _authorized(request: Request) -> bool:
-    if not settings.auth_token:
-        return True
-    supplied = (
+def _supplied_token(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (
         request.query_params.get("token")
         or request.headers.get("x-assist-token")
         or request.cookies.get(COOKIE)
         or ""
     )
-    return supplied == settings.auth_token
+
+
+def _authorized(request: Request) -> bool:
+    if not settings.auth_token:
+        peer = request.client.host if request.client else ""
+        return is_local_request(peer, request.headers.get("x-forwarded-for", ""))
+    supplied = _supplied_token(request)
+    return bool(supplied) and hmac.compare_digest(
+        supplied.encode(), settings.auth_token.encode()
+    )
+
+
+def _same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    return urlsplit(origin).netloc == request.headers.get("host", "")
+
+
+def _is_https(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
+    return request.url.scheme == "https" or forwarded.lower() == "https"
 
 
 def _schedule_restart() -> None:
     def restart() -> None:
-        subprocess.Popen(
-            ["systemctl", "--user", "restart", "assistant"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        # systemd (Restart=always) and Docker's restart policy revive us. This
+        # works for user units, system units and containers without needing
+        # permission to call systemctl from the service account.
+        os.kill(os.getpid(), signal.SIGTERM)
 
-    threading.Timer(0.6, restart).start()
+    threading.Timer(0.5, restart).start()
 
 
 def _validated(form: dict[str, list[str]]) -> tuple[dict[str, str], list[str]]:
@@ -323,7 +346,7 @@ def _page(values: dict[str, str], message: str = "", error: bool = False) -> str
         f' · threshold <code>{html.escape(values.get("WAKE_THRESHOLD", ""))}</code></div>'
     )
     host = html.escape(f"{settings.host}:{settings.port}")
-    token_state = "on" if settings.auth_token else "off (anyone on your network can open this page)"
+    token_state = "on" if settings.auth_token else "off (local network only)"
 
     return f"""<!doctype html>
 <html lang="en">
@@ -413,9 +436,36 @@ def _page(values: dict[str, str], message: str = "", error: bool = False) -> str
 def _respond(request: Request, body: str, status: int = 200) -> HTMLResponse:
     response = HTMLResponse(body, status_code=status)
     token = request.query_params.get("token")
-    if settings.auth_token and token == settings.auth_token:
-        response.set_cookie(COOKIE, token, httponly=True, samesite="lax")
+    if settings.auth_token and token and hmac.compare_digest(
+        token.encode(), settings.auth_token.encode()
+    ):
+        response.set_cookie(
+            COOKIE,
+            token,
+            httponly=True,
+            samesite="lax",
+            secure=_is_https(request),
+        )
     return response
+
+
+@router.post("/config/login", response_model=None)
+async def config_login(request: Request) -> Response:
+    form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
+    supplied = (form.get("token") or [""])[0]
+    if settings.auth_token and hmac.compare_digest(
+        supplied.encode(), settings.auth_token.encode()
+    ):
+        response = RedirectResponse("/config", status_code=303)
+        response.set_cookie(
+            COOKIE,
+            supplied,
+            httponly=True,
+            samesite="lax",
+            secure=_is_https(request),
+        )
+        return response
+    return HTMLResponse(_login_page("Token did not match."), status_code=401)
 
 
 @router.get("/config", response_model=None)
@@ -432,6 +482,8 @@ async def config_page(request: Request) -> Response:
 async def config_save(request: Request) -> Response:
     if not _authorized(request):
         return HTMLResponse(_login_page(), status_code=401)
+    if not _same_origin(request):
+        return HTMLResponse("Cross-origin request rejected.", status_code=403)
     form = parse_qs((await request.body()).decode("utf-8", "replace"), keep_blank_values=True)
     updates, errors = _validated(form)
     if errors:
@@ -451,6 +503,8 @@ async def config_save(request: Request) -> Response:
 async def config_restart(request: Request) -> Response:
     if not _authorized(request):
         return HTMLResponse(_login_page(), status_code=401)
+    if not _same_origin(request):
+        return HTMLResponse("Cross-origin request rejected.", status_code=403)
     _schedule_restart()
     return _respond(request, _restarting_page())
 
@@ -464,14 +518,15 @@ p{color:#8fa3bd}</style></head><body><div style="text-align:center">
 <h1>Restarting the assistant…</h1><p>This page returns in a few seconds.</p></div></body></html>"""
 
 
-def _login_page() -> str:
-    return """<!doctype html><html><head><meta charset="utf-8"><title>Token required</title>
-<style>body{background:#070b13;color:#e6edf7;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}
-form{background:#0f1a2b;border:1px solid #1e2d45;border-radius:14px;padding:24px;width:320px}
-input{width:100%;padding:10px 12px;border-radius:9px;background:#0a1422;color:#e6edf7;border:1px solid #26374f;font:inherit;margin:10px 0}
-button{width:100%;padding:11px;border-radius:10px;border:0;background:#38bdf8;color:#04121f;font:inherit;font-weight:600;cursor:pointer}
-p{color:#8fa3bd;margin:0}</style></head><body>
-<form method="get" action="/config"><h2>Relay token</h2>
-<p>This assistant is protected by ASSIST_TOKEN.</p>
+def _login_page(message: str = "") -> str:
+    notice = f'<p class="bad">{html.escape(message)}</p>' if message else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Token required</title>
+<style>body{{background:#070b13;color:#e6edf7;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}}
+form{{background:#0f1a2b;border:1px solid #1e2d45;border-radius:14px;padding:24px;width:320px}}
+input{{width:100%;padding:10px 12px;border-radius:9px;background:#0a1422;color:#e6edf7;border:1px solid #26374f;font:inherit;margin:10px 0}}
+button{{width:100%;padding:11px;border-radius:10px;border:0;background:#38bdf8;color:#04121f;font:inherit;font-weight:600;cursor:pointer}}
+p{{color:#8fa3bd;margin:0}}.bad{{color:#fecaca;margin:8px 0 0}}</style></head><body>
+<form method="post" action="/config/login"><h2>Relay token</h2>
+<p>This assistant is protected by ASSIST_TOKEN.</p>{notice}
 <input type="password" name="token" autofocus autocomplete="off">
 <button type="submit">Open settings</button></form></body></html>"""

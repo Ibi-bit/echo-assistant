@@ -6,11 +6,13 @@ services:
     env_file:
       - ./server/.env
     ports:
-      # Bind to localhost only when Caddy terminates TLS in front (see deploy/cloud.md).
+      # All interfaces by default so the tablet can reach it on the LAN.
+      # For a Caddy-only deployment, change to "127.0.0.1:8765:8765".
       - "8765:8765"
     volumes:
-      # Whisper caches its model here after the first request.
-      - ./server/models:/app/server/models
+      # Only Whisper's downloaded model is host state. Piper and wake-word
+      # models stay in the image, so a fresh host works without a local copy.
+      - ./server/models/whisper:/app/server/models/whisper
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4)"]
       interval: 30s
@@ -28,6 +30,7 @@ services:
   #     - assistant
   #   environment:
   #     ASSIST_DOMAIN: ${ASSIST_DOMAIN:-localhost}
+  #     ASSIST_UPSTREAM: assistant:8765
   #   ports:
   #     - "80:80"
   #     - "443:443"

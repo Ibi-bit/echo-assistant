@@ -77,7 +77,8 @@ $SUDO systemctl enable --now assistant
 $SUDO systemctl restart assistant
 
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q 'Status: active'; then
-    $SUDO ufw allow 8765/tcp >/dev/null
+    $SUDO ufw allow 80/tcp >/dev/null
+    $SUDO ufw allow 443/tcp >/dev/null
 fi
 REMOTE
 
@@ -87,5 +88,13 @@ echo "== health"
 
 TOKEN=$("${SSH[@]}" 'cat "$HOME/.assist_token"')
 echo
-echo "tablet relay:  ws://$HOST:8765/ws?token=$TOKEN"
-echo "settings page: http://$HOST:8765/config?token=$TOKEN"
+echo "token:         $TOKEN"
+if [ -n "${ASSIST_DOMAIN:-}" ]; then
+    echo "tablet relay:  wss://$ASSIST_DOMAIN/ws?token=$TOKEN"
+    echo "settings page: https://$ASSIST_DOMAIN/config"
+else
+    echo "tablet relay:  set up Caddy or Cloudflare first (deploy/cloud.md)"
+    echo "settings page: http://127.0.0.1:8765/config through an SSH tunnel:"
+    echo "  ssh -L 8765:127.0.0.1:8765 $TARGET_USER@$HOST"
+    echo "Public ws:// is rejected by the app; rerun with ASSIST_DOMAIN=<domain>."
+fi

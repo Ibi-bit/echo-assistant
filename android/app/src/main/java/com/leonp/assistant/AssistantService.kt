@@ -363,7 +363,7 @@ class AssistantService : Service(), RelayClient.Listener {
         if (client !== relay) return
         main.post {
             overlay.setIcon("idle")
-            overlay.setState("Offline — retrying…")
+            overlay.setState(if (willRetry) "Offline — retrying…" else reason.take(70))
         }
         if (!willRetry || !running || reconnectScheduled) return
         reconnectScheduled = true

@@ -73,12 +73,13 @@ cd ~/echo-assistant
 sudo docker compose up -d --build
 ```
 
-The compose file mounts `server/models` so Whisper's download survives rebuilds.
+The compose file mounts only `server/models/whisper` so Whisper's download
+survives rebuilds. Piper and wake-word models come from the image.
 
 ## 4. TLS
 
-The tablet accepts `ws://` on the LAN, but a public IP should use `wss://`.
-Either option is free.
+The tablet accepts `ws://` on the LAN, but a public host must use `wss://`;
+the app rejects public `ws://`. Either option is free.
 
 ### Caddy + DuckDNS
 
@@ -92,8 +93,8 @@ Either option is free.
    sudo ASSIST_DOMAIN=myassistant.duckdns.org caddy run --config deploy/Caddyfile
    ```
 
-   Caddy needs ports 80/443 open. With Caddy in front, bind uvicorn to
-   `127.0.0.1` instead of `0.0.0.0` (`HOST=127.0.0.1` in `.env`).
+   Caddy needs ports 80/443 open. Keep 8765 closed at the cloud firewall;
+   Caddy reaches the assistant over localhost or the compose network.
 
 ### Cloudflare Tunnel
 
@@ -119,10 +120,12 @@ Then the tablet relay URL becomes:
 
 - `wss://myassistant.duckdns.org/ws?token=<token>`
 
-and the settings page is `https://myassistant.duckdns.org/config?token=<token>`
-(it sets a cookie after the first visit). The token protects both the WebSocket
-and the `/config` page. Keep port 8765 closed in the cloud firewall when Caddy
-or Cloudflare is in front.
+and the settings page is `https://myassistant.duckdns.org/config`. It asks for
+the token and sets a cookie after the first visit. The app moves a token in the
+relay URL into an `Authorization` header, so it does not stay in access logs.
+The token protects both the WebSocket and the `/config` page. Public `ws://` is
+rejected by the app; use `wss://` behind Caddy or Cloudflare. Keep port 8765
+closed in the cloud firewall when either is in front.
 
 ## 6. Point the tablet at it
 
@@ -140,13 +143,15 @@ on Oracle Always Free.
 ## Tencent Cloud Lighthouse (what we actually use)
 
 A 2 vCPU / 2 GB Lighthouse instance in Ubuntu 24.04 runs the whole stack in ~800 MB.
-Open TCP 8765 in the Lighthouse console (**防火墙 / Firewall → Add rule**, custom TCP),
-then deploy from this machine with:
+The app rejects public `ws://`, so put Caddy or Cloudflare in front (section 4)
+and open ports 80/443 instead of exposing 8765. Then deploy from this machine
+with:
 
 ```bash
-./deploy/push.sh <public-ip> ubuntu ~/.ssh/oracle-assistant.key
+ASSIST_DOMAIN=myassistant.duckdns.org \
+  ./deploy/push.sh <public-ip> ubuntu ~/.ssh/oracle-assistant.key
 ```
 
-The script prints the tablet relay URL (`ws://IP:8765/ws?token=...`) and the settings
-page URL. The service is a system unit (`/etc/systemd/system/assistant.service`), so it
-starts on boot and restarts on failure without any login.
+The script prints the tablet `wss://` relay URL and the settings page URL. The
+service is a system unit (`/etc/systemd/system/assistant.service`), so it starts
+on boot and restarts on failure without any login.

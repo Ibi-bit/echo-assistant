@@ -187,4 +187,22 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_song",
+            "description": (
+                "Search for a song on Spotify and start playing it on the Rusty Speaker device. "
+                "Give the track name; optionally include the artist. Uses Spotify Web API with PKCE OAuth."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "track": {"type": "string", "description": "Song title, e.g. 'Bohemian Rhapsody'."},
+                    "artist": {"type": "string", "description": "Optional artist name to narrow the search."},
+                },
+                "required": ["track"],
+            },
+        },
+    },
 ]

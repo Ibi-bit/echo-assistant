@@ -1,0 +1,9 @@
+.git
+.github
+android
+**/.venv
+**/.env
+server/models
+**/__pycache__
+**/*.pyc
+*.wav

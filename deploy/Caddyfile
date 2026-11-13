@@ -1,8 +1,8 @@
 {$ASSIST_DOMAIN} {
 	encode zstd gzip
 
-	# WebSocket relay, including the ?token=... query.
-	reverse_proxy assistant:8765
+	# WebSocket relay. The app sends the token as a header; query tokens still work.
+	reverse_proxy {$ASSIST_UPSTREAM:127.0.0.1:8765}
 
 	# Settings page. Add basic auth here if you do not use ASSIST_TOKEN.
 	# basicauth {
