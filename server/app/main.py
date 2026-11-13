@@ -9,7 +9,13 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import RedirectResponse
 
 from .audio import WakeWord
-from .config import SERVER_DIR, is_local_request, settings
+from .config import (
+    SERVER_DIR,
+    is_local_request,
+    is_secure_transport,
+    redact_token,
+    settings,
+)
 from .pipeline import AssistantSession
 from .stt import Transcriber
 from .tts import Speaker
@@ -18,12 +24,31 @@ from .webconfig import router as web_config_router
 log = logging.getLogger("assistant")
 
 
+class _TokenRedactingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_token(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_token(a) if isinstance(a, str) else a for a in record.args
+            )
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: redact_token(value) if isinstance(value, str) else value
+                for key, value in record.args.items()
+            }
+        return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    redactor = _TokenRedactingFilter()
+    for name in ("uvicorn.access", "uvicorn.error"):
+        logging.getLogger(name).addFilter(redactor)
     for noisy in ("httpx2", "huggingface_hub", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if not settings.api_key:
@@ -71,6 +96,16 @@ async def health() -> dict:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
+    peer = websocket.client.host if websocket.client else ""
+    forwarded_for = websocket.headers.get("x-forwarded-for", "")
+    if not is_secure_transport(
+        peer,
+        forwarded_for,
+        websocket.headers.get("x-forwarded-proto", ""),
+        websocket.url.scheme,
+    ):
+        await websocket.close(code=4403)
+        return
     if settings.auth_token:
         auth = websocket.headers.get("authorization", "")
         supplied = (
@@ -84,10 +119,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             supplied.encode(), settings.auth_token.encode()
         )
     else:
-        peer = websocket.client.host if websocket.client else ""
-        allowed = is_local_request(
-            peer, websocket.headers.get("x-forwarded-for", "")
-        )
+        allowed = is_local_request(peer, forwarded_for)
     if not allowed:
         await websocket.close(code=4401)
         return

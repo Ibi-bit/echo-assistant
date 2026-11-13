@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from .config import SERVER_DIR, is_local_request, settings
+from .config import SERVER_DIR, is_local_request, is_secure_transport, settings
 
 router = APIRouter()
 ENV_PATH = SERVER_DIR / ".env"
@@ -73,7 +73,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
                 "ASSIST_TOKEN",
                 "Relay token",
                 "password",
-                "Optional. The tablet's relay URL then needs ?token=... Leave blank to keep.",
+                "Optional. The app reads ?token=... from the relay URL and sends it as a header. Leave blank to keep.",
             ),
         ],
     ),
@@ -209,9 +209,17 @@ def _supplied_token(request: Request) -> str:
 
 
 def _authorized(request: Request) -> bool:
+    peer = request.client.host if request.client else ""
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if not is_secure_transport(
+        peer,
+        forwarded_for,
+        request.headers.get("x-forwarded-proto", ""),
+        request.url.scheme,
+    ):
+        return False
     if not settings.auth_token:
-        peer = request.client.host if request.client else ""
-        return is_local_request(peer, request.headers.get("x-forwarded-for", ""))
+        return is_local_request(peer, forwarded_for)
     supplied = _supplied_token(request)
     return bool(supplied) and hmac.compare_digest(
         supplied.encode(), settings.auth_token.encode()

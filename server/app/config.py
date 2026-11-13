@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def is_local_host(host: str) -> bool:
         return False
     if host == "localhost":
         return True
+    host = host.removeprefix("[").removesuffix("]")
     try:
         ip = ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:
@@ -48,6 +50,31 @@ def is_local_request(peer_host: str, forwarded_for: str = "") -> bool:
     if forwarded_for:
         return is_local_host(forwarded_for.split(",", 1)[0].strip())
     return True
+
+
+def is_secure_transport(
+    peer_host: str,
+    forwarded_for: str,
+    forwarded_proto: str,
+    scheme: str,
+) -> bool:
+    """Allow local traffic, or public traffic only through a local TLS proxy."""
+    if is_local_request(peer_host, forwarded_for):
+        return True
+    # A public client connecting straight to uvicorn is cleartext, whatever
+    # headers it sends. TLS must terminate at a local proxy.
+    if not is_local_host(peer_host):
+        return False
+    proto = forwarded_proto.split(",", 1)[0].strip().lower()
+    return scheme.lower() in ("https", "wss") or proto == "https"
+
+
+_TOKEN_QUERY = re.compile(r"(?i)(token=)[^&\s\"]+")
+
+
+def redact_token(text: str) -> str:
+    """Keep relay tokens out of access logs."""
+    return _TOKEN_QUERY.sub(r"\1[redacted]", text)
 
 
 def _env(name: str, default: str) -> str:

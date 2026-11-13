@@ -79,6 +79,8 @@ $SUDO systemctl restart assistant
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q 'Status: active'; then
     $SUDO ufw allow 80/tcp >/dev/null
     $SUDO ufw allow 443/tcp >/dev/null
+    # Only Caddy should reach the relay from outside.
+    $SUDO ufw delete allow 8765/tcp >/dev/null 2>&1 || true
 fi
 REMOTE
 

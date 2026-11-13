@@ -123,9 +123,10 @@ Then the tablet relay URL becomes:
 and the settings page is `https://myassistant.duckdns.org/config`. It asks for
 the token and sets a cookie after the first visit. The app moves a token in the
 relay URL into an `Authorization` header, so it does not stay in access logs.
-The token protects both the WebSocket and the `/config` page. Public `ws://` is
-rejected by the app; use `wss://` behind Caddy or Cloudflare. Keep port 8765
-closed in the cloud firewall when either is in front.
+The token protects both the WebSocket and the `/config` page. Public cleartext
+`ws://`/`http://` is rejected by the app and by the server; use `wss://` behind
+a local Caddy or Cloudflare proxy. `push.sh` closes port 8765 in `ufw` and
+opens only 80/443.
 
 ## 6. Point the tablet at it
 

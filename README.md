@@ -125,7 +125,7 @@ entries survive.
 | `END_SILENCE_MS` | `900` | How long a pause ends the question |
 | `HISTORY_TURNS` | `8` | Conversation memory per tablet |
 | `DISABLE_REASONING` | `true` | Keep `true` for Nemotron; otherwise it writes a long reasoning preamble before answering |
-| `ASSIST_TOKEN` | empty | If set, clients must send `?token=...` or an `Authorization: Bearer` header; `/config` asks for it. Without it, clients are limited to loopback/private LAN addresses |
+| `ASSIST_TOKEN` | empty | If set, clients must send `?token=...` or an `Authorization: Bearer` header; `/config` asks for it. Without it, clients are limited to loopback/private LAN addresses. Public cleartext is rejected |
 
 ## Tablet
 
@@ -207,5 +207,5 @@ Flash, for example), which is why it is a setting.
 - **Free tier:** OpenRouter's free models are rate limited (about 20 requests/min, 50/day without credits, 1,000/day after a one-time $10 top-up). NVIDIA's free endpoint also logs requests to improve its products — don't feed it secrets.
 - **One speaker at a time:** the server serialises Whisper and Piper across sessions, so a second tablet queues behind the first.
 - **Search is best-effort:** DuckDuckGo's HTML page rate-limits scrapers and wttr.in can be unavailable; the assistant then says it could not reach the web.
-- **LAN traffic is cleartext:** the app accepts `ws://` only for private/LAN addresses. Use `wss://` behind Caddy or Cloudflare Tunnel for a public host.
+- **LAN traffic is cleartext:** the app accepts `ws://` only for private/LAN addresses. Use `wss://` behind Caddy or Cloudflare Tunnel for a public host; public cleartext is rejected by the server too.
 - **Settings are local by default:** with no `ASSIST_TOKEN`, `/config` and `/ws` accept only loopback/private-LAN clients. Set a token before exposing the relay to the internet.
